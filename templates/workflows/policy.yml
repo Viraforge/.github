@@ -1,0 +1,30 @@
+name: Policy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce workflow naming convention
+        run: |
+          test -f .github/workflows/ai-review.yml
+          test -f .github/workflows/merge-automation.yml
+
+      - name: Verify MINIMAX secret is referenced consistently
+        run: |
+          if rg -n "OPENROUTER_API_KEY" .github/workflows scripts CLAUDE.md AGENTS.md 2>/dev/null; then
+            echo "Legacy OPENROUTER references found"
+            exit 1
+          fi
+
+      - name: Placeholder for repo-specific policy checks
+        run: |
+          echo "Add version bump, lockfile, forbidden token, or deployment policy checks here."

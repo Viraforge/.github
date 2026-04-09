@@ -1,0 +1,108 @@
+name: Merge Automation
+
+on:
+  status: {}
+  check_run:
+    types: [completed]
+
+concurrency:
+  group: merge-automation-${{ github.event.commit.sha || github.event.check_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate-merge:
+    if: >-
+      (github.event_name == 'status' && github.event.context == 'ai-review/verdict') ||
+      (github.event_name == 'check_run' && github.event.check_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      statuses: read
+      checks: read
+
+    steps:
+      - name: Evaluate merge conditions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.eventName === 'status'
+              ? context.payload.commit.sha
+              : context.payload.check_run.head_sha;
+
+            const requiredChecks = ['policy', 'verify', 'ai-review/verdict'];
+
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+            });
+
+            const pr = prs.find((candidate) => candidate.state === 'open');
+            if (!pr) {
+              core.info('No open PR found for this commit');
+              return;
+            }
+
+            const { data: combined } = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: sha,
+            });
+
+            const statusMap = {};
+            for (const status of combined.statuses) {
+              statusMap[status.context] = status.state;
+            }
+
+            const { data: checkRuns } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: sha,
+            });
+
+            for (const run of checkRuns.check_runs) {
+              if (run.conclusion === 'success') {
+                statusMap[run.name] = 'success';
+              }
+            }
+
+            const missing = requiredChecks.filter((check) => statusMap[check] !== 'success');
+            if (missing.length > 0) {
+              core.info(`Missing required checks: ${missing.join(', ')}`);
+              return;
+            }
+
+            const verdictStatus = combined.statuses.find((status) => status.context === 'ai-review/verdict');
+            const description = verdictStatus?.description || '';
+            if (description.includes('HIGH_RISK') || description.includes('manual review')) {
+              core.info('AI review requires manual merge');
+              return;
+            }
+
+            try {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                merge_method: 'squash',
+                commit_title: `${pr.title} (#${pr.number})`,
+              });
+              core.info(`Merged PR #${pr.number}`);
+            } catch (error) {
+              if (String(error.message || '').includes('not in a mergeable state')) {
+                try {
+                  await github.rest.pulls.updateBranch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                  });
+                  core.info(`Updated branch for PR #${pr.number}`);
+                } catch (updateError) {
+                  core.info(`Branch update failed: ${updateError.message}`);
+                }
+                return;
+              }
+              throw error;
+            }

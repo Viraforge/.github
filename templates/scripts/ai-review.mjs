@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
+
 export const MINIMAX_URL = "https://api.minimax.io/v1/chat/completions";
 export const MODEL = "MiniMax-M2.7";
 const MAX_DIFF_BYTES = 100_000;
@@ -193,18 +195,26 @@ export async function runReview({ apiKey, diff: rawDiff, title, body, filesChang
   return result;
 }
 
+function readInput(name) {
+  const filePath = process.env[`${name}_FILE`];
+  if (filePath) {
+    return readFileSync(filePath, "utf8");
+  }
+  return process.env[name] || "";
+}
+
 async function main() {
   try {
     const result = await runReview({
       apiKey: process.env.MINIMAX_API_KEY,
-      diff: process.env.PR_DIFF,
+      diff: readInput("PR_DIFF"),
       title: process.env.PR_TITLE || `PR #${process.env.PR_NUMBER || ""}`,
-      body: process.env.PR_BODY || "",
+      body: readInput("PR_BODY"),
       filesChanged: process.env.PR_FILES_CHANGED || "",
       additions: process.env.PR_ADDITIONS || "",
       deletions: process.env.PR_DELETIONS || "",
-      reviewComments: process.env.PR_REVIEW_COMMENTS || "",
-      reviews: process.env.PR_REVIEWS || "",
+      reviewComments: readInput("PR_REVIEW_COMMENTS"),
+      reviews: readInput("PR_REVIEWS"),
     });
     console.log(JSON.stringify(result));
   } catch (error) {

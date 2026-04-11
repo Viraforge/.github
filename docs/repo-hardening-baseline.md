@@ -87,6 +87,8 @@ The AI review lane should:
 - optionally remediate bounded findings
 - never modify workflow files during remediation
 - skip self-trigger loops via `[ai-fix]` marker or equivalent
+- pass diff/comment payloads to the reviewer via files instead of giant environment variables
+- ignore stale inline comments from older commits and only consider comments anchored to the current head SHA
 
 ## Merge Automation Standard
 
@@ -98,6 +100,13 @@ Merge automation should:
 - verify all required checks are green
 - update the branch if behind and wait for fresh checks
 - merge with squash by default
+
+## PR Reconciliation Standard
+
+Add a scheduled `pr-reconcile.yml` workflow that:
+
+- re-arms auto-merge for already-green PRs when an event edge is missed
+- closes stranded conflicting PRs when a newer merged PR with the same issue key already landed
 
 ## New Repo Bootstrap Checklist
 

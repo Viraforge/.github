@@ -32,6 +32,18 @@ Verdict rules:
 3. Warnings only => PASS_WITH_NOTES
 4. No findings => PASS
 
+You must also classify the version bump this PR requires. Each repo has one or two version dials:
+- "app" — the primary app version, tracked in package.json (or pyproject.toml / Cargo.toml depending on the repo)
+- "extension" — optional, chrome-extension/manifest.json, present only in repos that ship a browser extension
+
+For each dial that exists in the repo, pick one of:
+- "major" — breaking API/schema change, removed public route, incompatible migration
+- "minor" — new user-facing feature, new endpoint, new env var, substantial capability
+- "patch" — bug fix, refactor, docs, CI/infra, test-only change, dep bump
+- "none" — no semantic change affecting this dial
+
+If the repo doesn't have a particular dial, return "none" for it. apply-version-bump.mjs will skip dials whose target file doesn't exist.
+
 Respond with JSON only:
 {
   "verdict": "PASS | PASS_WITH_NOTES | FAIL | HIGH_RISK",
@@ -43,7 +55,12 @@ Respond with JSON only:
       "file": "path/to/file.ts",
       "line": 10
     }
-  ]
+  ],
+  "versionBump": {
+    "app": "major | minor | patch | none",
+    "extension": "major | minor | patch | none",
+    "rationale": "One sentence explaining the bump choice"
+  }
 }`;
 
 export function prepareDiff(rawDiff, maxBytes = MAX_DIFF_BYTES) {
@@ -167,6 +184,7 @@ export function parseVerdict(raw) {
         verdict: validVerdicts.includes(verdict) ? verdict : "FAIL",
         summary: String(parsed.summary || "Review completed").slice(0, 140),
         findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+        versionBump: normalizeVersionBump(parsed.versionBump),
       };
     } catch {
       continue;
@@ -177,6 +195,21 @@ export function parseVerdict(raw) {
     verdict: "HIGH_RISK",
     summary: "AI review response was not valid JSON",
     findings: [{ severity: "note", message: "AI review returned non-JSON content; no blocking findings were trusted.", file: "", line: 0 }],
+    versionBump: { app: "none", extension: "none", rationale: "AI review response was not valid JSON" },
+  };
+}
+
+const VALID_BUMP_LEVELS = ["major", "minor", "patch", "none"];
+
+export function normalizeVersionBump(raw) {
+  const normalize = (value) => {
+    const level = String(value || "").toLowerCase();
+    return VALID_BUMP_LEVELS.includes(level) ? level : "none";
+  };
+  return {
+    app: normalize(raw?.app),
+    extension: normalize(raw?.extension),
+    rationale: String(raw?.rationale || "").slice(0, 280),
   };
 }
 
@@ -190,6 +223,13 @@ export async function runReview({ apiKey, diff: rawDiff, title, body, filesChang
   if (truncated && result.verdict === "PASS") {
     result.verdict = "PASS_WITH_NOTES";
     result.findings.push({ severity: "note", message: "Diff exceeded 100KB and was truncated.", file: "", line: 0 });
+  }
+
+  if (truncated) {
+    result.versionBump = {
+      ...result.versionBump,
+      rationale: `${result.versionBump?.rationale || ""} (diff truncated; bump inferred from partial context)`.trim(),
+    };
   }
 
   return result;
@@ -229,6 +269,7 @@ async function main() {
           line: 0,
         },
       ],
+      versionBump: { app: "none", extension: "none", rationale: "AI review unavailable" },
     }));
   }
 }
